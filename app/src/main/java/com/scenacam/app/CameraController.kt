@@ -57,6 +57,12 @@ class CameraController(private val context: Context, private val listener: Liste
         /** [merged] = câte cadre au fost combinate (1 = fotografie simplă). */
         fun onPhotoSaved(uri: Uri?, plan: ShotPlan, merged: Int)
         fun onCameraError(message: String)
+
+        /** Captura a început: de acum telefonul trebuie ținut nemișcat. [frames] = câte cadre se fac. */
+        fun onCaptureStarted(frames: Int)
+
+        /** Captura s-a terminat: telefonul poate fi mișcat (prelucrarea continuă în fundal). */
+        fun onCaptureFinished(frames: Int)
     }
 
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -107,6 +113,7 @@ class CameraController(private val context: Context, private val listener: Liste
 
     // Starea rafalei în curs; accesate doar de pe firul camerei.
     private var burstActive = false
+    private var singleInFlight = false
     private var burstExpected = 0
     private val burstFrames = ArrayList<ByteArray>()
     private val burstTimeout = Runnable { finishBurst(true) }
@@ -308,6 +315,7 @@ class CameraController(private val context: Context, private val listener: Liste
         previewSurface = null
         capturing = false
         burstActive = false
+        singleInFlight = false
         burstFrames.clear()
         aeIso = 0
         aeExposureNs = 0L
@@ -411,8 +419,10 @@ class CameraController(private val context: Context, private val listener: Liste
                     ses.captureBurst(List(frames) { request }, stillCallback, h)
                     h.postDelayed(burstTimeout, 12000)
                 } else {
+                    singleInFlight = true
                     ses.capture(b.build(), stillCallback, h)
                 }
+                main.post { listener.onCaptureStarted(frames) }
             } catch (e: Exception) {
                 capturing = false
                 burstActive = false
@@ -575,7 +585,11 @@ class CameraController(private val context: Context, private val listener: Liste
     private val stillCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
             // La rafală, următoarea fotografie e permisă abia după ce au sosit toate cadrele.
-            if (!burstActive) capturing = false
+            if (singleInFlight) {
+                singleInFlight = false
+                capturing = false
+                main.post { listener.onCaptureFinished(1) }
+            }
         }
 
         override fun onCaptureFailed(s: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
@@ -583,7 +597,9 @@ class CameraController(private val context: Context, private val listener: Liste
                 burstExpected--
                 finishBurst(false)
             } else {
+                singleInFlight = false
                 capturing = false
+                main.post { listener.onCaptureFinished(1) }
                 fail("Captura a eșuat")
             }
         }
@@ -623,6 +639,8 @@ class CameraController(private val context: Context, private val listener: Liste
         capturing = false
         val frames = ArrayList(burstFrames)
         burstFrames.clear()
+        val expected = max(burstExpected, frames.size)
+        main.post { listener.onCaptureFinished(max(2, expected)) }
         if (frames.isEmpty()) fail("Captura a eșuat") else dispatch(frames)
     }
 

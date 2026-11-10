@@ -11,8 +11,8 @@ android {
         applicationId = "com.scenacam.app"
         minSdk = 29
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
         ndk {
             // Galaxy A56 este arm64; fără celelalte arhitecturi APK-ul e mult mai mic.
             abiFilters += "arm64-v8a"

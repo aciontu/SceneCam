@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
+import android.media.MediaActionSound
 import android.net.Uri
 import android.os.Bundle
 import android.view.MotionEvent
@@ -41,6 +42,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     private lateinit var nightButton: TextView
     private var nightEnabled = true
     private var lastPlan: ShotPlan = ShotPlan.DEFAULT
+    private val shutterSound = MediaActionSound()
     private lateinit var shutter: View
 
     private var controller: CameraController? = null
@@ -116,14 +118,8 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         }
         surfaceView.holder.addCallback(this)
 
-        shutter.setOnClickListener {
-            if (nightEnabled && lastPlan.burst > 1 && controller != null) {
-                Toast.makeText(this, getString(R.string.hold_still, lastPlan.burst), Toast.LENGTH_SHORT).show()
-            }
-            controller?.takePhoto()
-            flash.alpha = 0.7f
-            flash.animate().alpha(0f).setDuration(250).start()
-        }
+        shutterSound.load(MediaActionSound.SHUTTER_CLICK)
+        shutter.setOnClickListener { controller?.takePhoto() }
 
         modeButton.setOnClickListener {
             val scenes = Scene.values()
@@ -247,11 +243,13 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         steadiness.stop()
         orientationListener.disable()
         controller?.stop()
+        shutter.setBackgroundResource(R.drawable.shutter)
         super.onPause()
     }
 
     override fun onDestroy() {
         controller?.release()
+        shutterSound.release()
         super.onDestroy()
     }
 
@@ -326,6 +324,20 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
             getString(R.string.saved, plan.scene.title)
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onCaptureStarted(frames: Int) {
+        // Cerc galben = ține telefonul nemișcat.
+        shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+        shutter.setBackgroundResource(R.drawable.shutter_busy)
+        flash.alpha = 0.7f
+        flash.animate().alpha(0f).setDuration(250).start()
+    }
+
+    override fun onCaptureFinished(frames: Int) {
+        shutter.setBackgroundResource(R.drawable.shutter)
+        // La o fotografie simplă captura e aproape instantanee, deci al doilea sunet ar fi doar un ecou.
+        if (frames > 1) shutterSound.play(MediaActionSound.SHUTTER_CLICK)
     }
 
     override fun onCameraError(message: String) {
