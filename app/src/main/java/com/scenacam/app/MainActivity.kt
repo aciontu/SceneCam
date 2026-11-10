@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.OrientationEventListener
+import android.view.ScaleGestureDetector
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
@@ -33,6 +34,10 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     private lateinit var styleButton: TextView
     private lateinit var infoButton: TextView
     private var style = PhotoStyle.ORIGINAL
+    private lateinit var zoomText: TextView
+    private lateinit var scaleDetector: ScaleGestureDetector
+    private var zoom = 1f
+    private var multiTouch = false
     private lateinit var shutter: View
 
     private var controller: CameraController? = null
@@ -63,6 +68,15 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         shutter = findViewById(R.id.shutter)
         styleButton = findViewById(R.id.style_button)
         infoButton = findViewById(R.id.info_button)
+        zoomText = findViewById(R.id.zoom_text)
+
+        scaleDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                applyZoom(zoom * detector.scaleFactor)
+                return true
+            }
+        })
+        zoomText.setOnClickListener { applyZoom(1f) }
 
         val savedStyle = getPreferences(Context.MODE_PRIVATE).getString(PREF_STYLE, null)
         style = PhotoStyle.values().firstOrNull { it.name == savedStyle } ?: PhotoStyle.ORIGINAL
@@ -134,7 +148,13 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         }
 
         overlay.setOnTouchListener { v, event ->
-            if (event.action == MotionEvent.ACTION_UP && v.width > 0 && v.height > 0) {
+            scaleDetector.onTouchEvent(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> multiTouch = false
+                MotionEvent.ACTION_POINTER_DOWN -> multiTouch = true
+            }
+            // O atingere simplă focalizează; un gest cu două degete face doar zoom.
+            if (event.actionMasked == MotionEvent.ACTION_UP && !multiTouch && v.width > 0 && v.height > 0) {
                 val x = (event.x / v.width).coerceIn(0f, 1f)
                 val y = (event.y / v.height).coerceIn(0f, 1f)
                 controller?.focusAt(x, y)
@@ -148,6 +168,14 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
         renderMode()
         renderStyle()
+        applyZoom(1f)
+    }
+
+    private fun applyZoom(ratio: Float) {
+        val c = controller ?: return
+        zoom = ratio.coerceIn(c.zoomMin, c.zoomMax)
+        c.setZoom(zoom)
+        zoomText.text = String.format("%.1f×", zoom)
     }
 
     private fun renderStyle() {

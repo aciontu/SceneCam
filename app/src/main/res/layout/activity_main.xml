@@ -21,6 +21,22 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
+        <TextView
+            android:id="@+id/zoom_text"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_gravity="center_horizontal|bottom"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/chip_dark"
+            android:gravity="center"
+            android:minWidth="56dp"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:text="1.0×"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
         <View
             android:id="@+id/flash"
             android:layout_width="match_parent"

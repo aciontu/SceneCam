@@ -15,6 +15,7 @@ Aplicație de cameră pentru Android (gândită pentru Samsung Galaxy A56) care 
   - *Peisaj*: −0,3 EV ca să nu ardă cerul, ISO minim.
   - *Apus*: −0,7 EV și balans de alb „zi", ca să păstreze culorile calde.
 - **Atinge ecranul** pentru focalizare și măsurare într-un punct.
+- **Zoom cu două degete** pe previzualizare; atinge indicatorul (ex. `2.0×`) ca să revii la 1×. Peste 1× zoomul este digital, deci calitatea scade treptat.
 - **Butonul din dreapta** comută între „AI automat" și o scenă aleasă de tine.
 - Pozele se salvează în `DCIM/ScenaCam`, la rezoluția maximă 4:3 a camerei principale.
 
@@ -22,7 +23,7 @@ Sus pe ecran vezi mereu scena detectată, setările cu care se va face poza (`IS
 
 ## Limite, spuse direct
 
-- Aplicația folosește doar camera principală din spate, fără zoom, fără filmare.
+- Aplicația folosește camera principală din spate, fără filmare.
 - Controlul manual ISO/timp funcționează numai dacă telefonul îl oferă aplicațiilor terțe. La pornire, rândul gri arată `senzor manual: da/nu`. Dacă e `nu`, aplicația lucrează cu compensare de expunere, măsurare pe față și balans de alb.
 - Nu are acces la procesarea Samsung (HDR și mod Noapte din mai multe cadre). În scene cu contrast foarte mare sau întuneric puternic, camera Samsung poate da rezultate mai bune.
 - Codul a fost verificat la compilare față de API-ul Android și logica de decizie are teste, dar aplicația nu a fost încă rulată pe un telefon real.

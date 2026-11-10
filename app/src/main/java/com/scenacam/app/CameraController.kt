@@ -26,6 +26,7 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.media.ExifInterface
 import android.media.ImageReader
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -42,6 +43,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -77,6 +79,15 @@ class CameraController(private val context: Context, private val listener: Liste
     private val nrHighQuality: Boolean
     private val edgeHighQuality: Boolean
     private val lowFpsRange: Range<Int>?
+
+    /** Limitele de zoom. Sub 1 înseamnă că telefonul trece singur pe camera ultra-wide. */
+    val zoomMin: Float
+    val zoomMax: Float
+    private val useZoomRatio: Boolean
+
+    @Volatile
+    var zoom = 1f
+        private set
 
     /** Orientarea telefonului: 0, 90, 180 sau 270 de grade. */
     @Volatile
@@ -206,6 +217,16 @@ class CameraController(private val context: Context, private val listener: Liste
         edgeHighQuality = (chars.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: IntArray(0))
             .contains(CameraMetadata.EDGE_MODE_HIGH_QUALITY)
 
+        val zoomRange = if (Build.VERSION.SDK_INT >= 30) {
+            chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+        } else {
+            null
+        }
+        useZoomRatio = zoomRange != null
+        val digitalMax = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+        zoomMin = if (zoomRange != null) min(1f, max(zoomRange.lower, 0.5f)) else 1f
+        zoomMax = max(1f, min(zoomRange?.upper ?: digitalMax, 10f))
+
         // Pentru scene întunecate: intervalul de cadre cu cea mai mică limită inferioară.
         val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
         lowFpsRange = fpsRanges
@@ -286,6 +307,16 @@ class CameraController(private val context: Context, private val listener: Liste
             val changed = previewKey(newPlan) != previewKey(plan)
             plan = newPlan
             if (changed) applyPreview()
+        }
+    }
+
+    fun setZoom(ratio: Float) {
+        val target = ratio.coerceIn(zoomMin, zoomMax)
+        handler?.post {
+            if (abs(target - zoom) >= 0.005f) {
+                zoom = target
+                applyPreview()
+            }
         }
     }
 
@@ -446,6 +477,12 @@ class CameraController(private val context: Context, private val listener: Liste
             if (maxAfRegions > 0) b.set(CaptureRequest.CONTROL_AF_REGIONS, rect)
         }
 
+        if (useZoomRatio) {
+            if (Build.VERSION.SDK_INT >= 30) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+        } else if (zoom > 1.001f) {
+            b.set(CaptureRequest.SCALER_CROP_REGION, viewRect())
+        }
+
         val fps = lowFpsRange
         if (p.lowFps && fps != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
 
@@ -456,13 +493,29 @@ class CameraController(private val context: Context, private val listener: Liste
 
     private fun toMetering(sensorRect: NormRect): MeteringRectangle {
         val r = sensorRect.clamped()
+        val view = viewRect()
         val w = activeArray.width()
         val h = activeArray.height()
-        val x = (r.left * w).roundToInt().coerceIn(0, w - 2)
-        val y = (r.top * h).roundToInt().coerceIn(0, h - 2)
-        val rw = (r.width * w).roundToInt().coerceIn(1, w - x)
-        val rh = (r.height * h).roundToInt().coerceIn(1, h - y)
+        val x = (view.left + r.left * view.width()).roundToInt().coerceIn(0, w - 2)
+        val y = (view.top + r.top * view.height()).roundToInt().coerceIn(0, h - 2)
+        val rw = (r.width * view.width()).roundToInt().coerceIn(1, w - x)
+        val rh = (r.height * view.height()).roundToInt().coerceIn(1, h - y)
         return MeteringRectangle(x, y, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX)
+    }
+
+    /**
+     * Zona din senzor care se vede în cadru. Cu CONTROL_ZOOM_RATIO coordonatele se raportează
+     * deja la cadrul mărit; cu decupaj (telefoane mai vechi) zona vizibilă e dreptunghiul decupat.
+     */
+    private fun viewRect(): Rect {
+        val w = activeArray.width()
+        val h = activeArray.height()
+        if (useZoomRatio || zoom <= 1.001f) return Rect(0, 0, w, h)
+        val cw = (w / zoom).roundToInt().coerceIn(2, w)
+        val ch = (h / zoom).roundToInt().coerceIn(2, h)
+        val left = (w - cw) / 2
+        val top = (h - ch) / 2
+        return Rect(left, top, left + cw, top + ch)
     }
 
     /** Doar ce influențează previzualizarea; fața e rotunjită ca să nu retrimitem cererea la fiecare tremur. */
