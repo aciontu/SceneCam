@@ -129,6 +129,18 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         bokehButton = findViewById(R.id.bokeh_button)
         bokehButton.visibility = if (controller?.bokehInfo != null) View.VISIBLE else View.GONE
         bokehButton.setOnClickListener { toggleBokeh() }
+
+        // Indicatorul de zoom stă pe previzualizare, exact deasupra butonului Noapte+.
+        nightButton.viewTreeObserver.addOnGlobalLayoutListener {
+            if (nightButton.width > 0 && zoomText.width > 0) {
+                val night = IntArray(2)
+                val zoomAt = IntArray(2)
+                nightButton.getLocationOnScreen(night)
+                zoomText.getLocationOnScreen(zoomAt)
+                val delta = night[0] + nightButton.width / 2 - (zoomAt[0] + zoomText.width / 2)
+                if (delta > 1 || delta < -1) zoomText.translationX += delta
+            }
+        }
         shutter.setOnClickListener { controller?.takePhoto() }
 
         modeButton.setOnClickListener {
