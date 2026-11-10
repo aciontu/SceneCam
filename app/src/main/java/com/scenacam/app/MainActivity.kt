@@ -1,0 +1,272 @@
+package com.scenacam.app
+
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Bundle
+import android.view.MotionEvent
+import android.view.OrientationEventListener
+import android.view.SurfaceHolder
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
+import android.widget.Toast
+
+class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callback {
+
+    private lateinit var surfaceView: AutoFitSurfaceView
+    private lateinit var overlay: OverlayView
+    private lateinit var flash: View
+    private lateinit var sceneText: TextView
+    private lateinit var settingsText: TextView
+    private lateinit var detailText: TextView
+    private lateinit var modeButton: TextView
+    private lateinit var galleryButton: TextView
+    private lateinit var shutter: View
+
+    private var controller: CameraController? = null
+    private lateinit var steadiness: SteadinessMonitor
+    private lateinit var orientationListener: OrientationEventListener
+    private val engine = SceneEngine()
+
+    /** null = AI alege scena; altfel scena e forțată de utilizator. */
+    private var forcedScene: Scene? = null
+    private var surfaceReady = false
+    private var resumed = false
+    private var lastPhoto: Uri? = null
+    private val clearTapRing = Runnable { overlay.clearTap() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setContentView(R.layout.activity_main)
+
+        surfaceView = findViewById(R.id.surface)
+        overlay = findViewById(R.id.overlay)
+        flash = findViewById(R.id.flash)
+        sceneText = findViewById(R.id.scene_text)
+        settingsText = findViewById(R.id.settings_text)
+        detailText = findViewById(R.id.detail_text)
+        modeButton = findViewById(R.id.mode_button)
+        galleryButton = findViewById(R.id.gallery_button)
+        shutter = findViewById(R.id.shutter)
+
+        steadiness = SteadinessMonitor(this)
+        orientationListener = object : OrientationEventListener(this) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                controller?.deviceOrientation = ((orientation + 45) / 90 * 90) % 360
+            }
+        }
+
+        try {
+            val c = CameraController(this, this)
+            controller = c
+            surfaceView.setAspect(c.previewSize.width, c.previewSize.height)
+            surfaceView.holder.setFixedSize(c.previewSize.width, c.previewSize.height)
+            val manual = if (c.caps.manualSensor) getString(R.string.manual_yes) else getString(R.string.manual_no)
+            detailText.text = getString(
+                R.string.camera_info, c.hardwareLevel, manual, c.jpegSize.width, c.jpegSize.height
+            )
+        } catch (e: Exception) {
+            sceneText.text = getString(R.string.no_camera)
+        }
+        surfaceView.holder.addCallback(this)
+
+        shutter.setOnClickListener {
+            controller?.takePhoto()
+            flash.alpha = 0.7f
+            flash.animate().alpha(0f).setDuration(250).start()
+        }
+
+        modeButton.setOnClickListener {
+            val scenes = Scene.values()
+            val current = forcedScene
+            forcedScene = when {
+                current == null -> scenes[0]
+                current.ordinal == scenes.size - 1 -> null
+                else -> scenes[current.ordinal + 1]
+            }
+            renderMode()
+        }
+
+        galleryButton.setOnClickListener {
+            val uri = lastPhoto
+            if (uri == null) {
+                Toast.makeText(this, R.string.no_photo_yet, Toast.LENGTH_SHORT).show()
+            } else {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW)
+                    intent.setDataAndType(uri, "image/jpeg")
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(this, R.string.no_gallery, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        overlay.setOnTouchListener { v, event ->
+            if (event.action == MotionEvent.ACTION_UP && v.width > 0 && v.height > 0) {
+                val x = (event.x / v.width).coerceIn(0f, 1f)
+                val y = (event.y / v.height).coerceIn(0f, 1f)
+                controller?.focusAt(x, y)
+                overlay.setTap(x, y)
+                overlay.removeCallbacks(clearTapRing)
+                overlay.postDelayed(clearTapRing, 5000)
+                v.performClick()
+            }
+            true
+        }
+
+        renderMode()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        steadiness.start()
+        if (orientationListener.canDetectOrientation()) orientationListener.enable()
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA)
+        } else {
+            startCameraIfReady()
+        }
+    }
+
+    override fun onPause() {
+        resumed = false
+        steadiness.stop()
+        orientationListener.disable()
+        controller?.stop()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        controller?.release()
+        super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CAMERA) return
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startCameraIfReady()
+        } else {
+            sceneText.text = getString(R.string.permission_needed)
+        }
+    }
+
+    private fun startCameraIfReady() {
+        val c = controller ?: return
+        if (!resumed || !surfaceReady) return
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
+        c.start(surfaceView.holder.surface)
+    }
+
+    // ------------------------------------------------------------------ SurfaceHolder.Callback
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        val c = controller ?: return
+        // Așteptăm ca suprafața să aibă exact dimensiunea cerută pentru previzualizare.
+        if (width == c.previewSize.width && height == c.previewSize.height) {
+            surfaceReady = true
+            startCameraIfReady()
+        }
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        surfaceReady = false
+        controller?.stop()
+    }
+
+    // ------------------------------------------------------------------ CameraController.Listener
+
+    override fun onAnalysis(result: AnalysisResult) {
+        val c = controller ?: return
+        val input = SceneInput(
+            stats = result.stats,
+            faces = result.faces,
+            labels = result.labels,
+            iso = c.aeIso,
+            exposureNs = c.aeExposureNs,
+            aperture = c.aeAperture,
+            gyro = steadiness.value
+        )
+        val detected = engine.update(input)
+        val scene = forcedScene ?: detected
+        val plan = engine.plan(scene, input, c.caps)
+        c.setPlan(plan)
+
+        overlay.setFaces(result.faces.map { it.sensorRect.sensorToUpright(c.sensorOrientation) })
+        render(plan, input, detected)
+    }
+
+    override fun onPhotoSaved(uri: Uri?, plan: ShotPlan) {
+        if (uri == null) {
+            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_LONG).show()
+            return
+        }
+        lastPhoto = uri
+        Toast.makeText(this, getString(R.string.saved, plan.scene.title), Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onCameraError(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    // ------------------------------------------------------------------ afișare
+
+    private fun renderMode() {
+        val forced = forcedScene
+        modeButton.text = if (forced == null) getString(R.string.mode_ai) else forced.icon + " " + forced.title
+    }
+
+    private fun render(plan: ShotPlan, input: SceneInput, detected: Scene) {
+        val forced = forcedScene
+        sceneText.text = if (forced == null) {
+            plan.scene.icon + "  " + plan.scene.title
+        } else {
+            plan.scene.icon + "  " + plan.scene.title + "  " + getString(R.string.forced_suffix, detected.title)
+        }
+
+        val sb = StringBuilder()
+        val iso = plan.manualIso
+        val exposure = plan.manualExposureNs
+        if (plan.hdr) {
+            sb.append("HDR")
+        } else if (iso != null && exposure != null) {
+            sb.append("ISO ").append(iso).append(" · ").append(SceneEngine.formatShutter(exposure))
+            sb.append(" · ").append(getString(R.string.manual_tag))
+        } else if (input.aeValid) {
+            sb.append("ISO ").append(input.iso).append(" · ").append(SceneEngine.formatShutter(input.exposureNs))
+            sb.append(" · ").append(getString(R.string.auto_tag))
+        } else {
+            sb.append(getString(R.string.auto_tag))
+        }
+        if (plan.evSteps != 0) sb.append(" · EV ").append(String.format("%+.1f", plan.evBias))
+        when (plan.awb) {
+            Awb.DAYLIGHT -> sb.append(" · WB ").append(getString(R.string.wb_daylight))
+            Awb.CLOUDY -> sb.append(" · WB ").append(getString(R.string.wb_cloudy))
+            Awb.AUTO -> {
+            }
+        }
+        if (plan.meterRect != null) sb.append(" · ").append(getString(R.string.face_metering))
+        settingsText.text = sb.toString()
+
+        val top = input.labels.entries.sortedByDescending { it.value }.take(3)
+            .joinToString(", ") { it.key + " " + (it.value * 100).toInt() + "%" }
+        val ev = SceneEngine.ev100(input)
+        val light = if (ev == null) "" else String.format("EV %.1f · ", ev)
+        detailText.text = light + plan.steadiness.title + (if (top.isEmpty()) "" else " · $top")
+    }
+
+    companion object {
+        private const val REQUEST_CAMERA = 1
+    }
+}

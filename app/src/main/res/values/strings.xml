@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScenaCam</string>
+    <string name="starting">Pornesc camera…</string>
+    <string name="no_camera">Camera nu este disponibilă</string>
+    <string name="permission_needed">Aplicația are nevoie de permisiunea pentru cameră</string>
+    <string name="camera_info">Nivel cameră: %1$s · senzor manual: %2$s · %3$d×%4$d</string>
+    <string name="manual_yes">da</string>
+    <string name="manual_no">nu</string>
+    <string name="mode_ai">AI automat</string>
+    <string name="forced_suffix">(ales manual · AI vede: %1$s)</string>
+    <string name="manual_tag">manual</string>
+    <string name="auto_tag">auto</string>
+    <string name="wb_daylight">zi</string>
+    <string name="wb_cloudy">înnorat</string>
+    <string name="face_metering">măsurare pe față</string>
+    <string name="gallery">Ultima poză</string>
+    <string name="take_photo">Fă o fotografie</string>
+    <string name="no_photo_yet">Nu ai făcut încă nicio poză</string>
+    <string name="no_gallery">Nu am găsit o aplicație de galerie</string>
+    <string name="saved">Salvat în DCIM/ScenaCam · %1$s</string>
+    <string name="save_failed">Fotografia nu a putut fi salvată</string>
+</resources>
