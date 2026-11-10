@@ -21,6 +21,10 @@
     <string name="saved">Salvat în DCIM/ScenaCam · %1$s</string>
     <string name="style_label">Stil: %1$s</string>
     <string name="info">Info</string>
+    <string name="bokeh">Bokeh</string>
+    <string name="bokeh_scene">🙂  Portret Bokeh</string>
+    <string name="bokeh_settings">Fundal estompat de Samsung</string>
+    <string name="bokeh_detail">Recunoașterea scenei e oprită în acest mod</string>
     <string name="night_on">Noapte+ ✓</string>
     <string name="night_off">Noapte+ ✕</string>
     <string name="frames">%1$d cadre</string>

@@ -9,7 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
-import android.media.MediaActionSound
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.net.Uri
 import android.os.Bundle
 import android.view.MotionEvent
@@ -21,6 +22,7 @@ import android.view.WindowManager
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 
 class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callback {
 
@@ -42,7 +44,12 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     private lateinit var nightButton: TextView
     private var nightEnabled = true
     private var lastPlan: ShotPlan = ShotPlan.DEFAULT
-    private val shutterSound = MediaActionSound()
+    private var soundPool: SoundPool? = null
+    private var clickSound = 0
+    private lateinit var bokehButton: TextView
+    private var bokehOn = false
+    private var surfaceW = 0
+    private var surfaceH = 0
     private lateinit var shutter: View
 
     private var controller: CameraController? = null
@@ -118,7 +125,10 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         }
         surfaceView.holder.addCallback(this)
 
-        shutterSound.load(MediaActionSound.SHUTTER_CLICK)
+        setUpSound()
+        bokehButton = findViewById(R.id.bokeh_button)
+        bokehButton.visibility = if (controller?.bokehInfo != null) View.VISIBLE else View.GONE
+        bokehButton.setOnClickListener { toggleBokeh() }
         shutter.setOnClickListener { controller?.takePhoto() }
 
         modeButton.setOnClickListener {
@@ -165,7 +175,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
                 MotionEvent.ACTION_POINTER_DOWN -> multiTouch = true
             }
             // O atingere simplă focalizează; un gest cu două degete face doar zoom.
-            if (event.actionMasked == MotionEvent.ACTION_UP && !multiTouch && v.width > 0 && v.height > 0) {
+            if (event.actionMasked == MotionEvent.ACTION_UP && !multiTouch && !bokehOn && v.width > 0 && v.height > 0) {
                 val x = (event.x / v.width).coerceIn(0f, 1f)
                 val y = (event.y / v.height).coerceIn(0f, 1f)
                 controller?.focusAt(x, y)
@@ -197,6 +207,72 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
     private fun renderStyle() {
         styleButton.text = getString(R.string.style_label, style.title)
+        if (bokehOn) renderBokeh()
+    }
+
+    private fun setUpSound() {
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val pool = SoundPool.Builder().setMaxStreams(2).setAudioAttributes(attributes).build()
+        soundPool = pool
+        // Sunetul de declanșator al telefonului, dacă e accesibil; altfel unul inclus în aplicație.
+        val system = listOf(
+            "/system/media/audio/ui/camera_click.ogg",
+            "/system/media/audio/ui/Shutter.ogg",
+            "/product/media/audio/ui/camera_click.ogg"
+        ).firstOrNull { File(it).canRead() }
+        var id = 0
+        if (system != null) {
+            id = try {
+                pool.load(system, 1)
+            } catch (e: Exception) {
+                0
+            }
+        }
+        if (id == 0) id = pool.load(this, R.raw.shutter, 1)
+        clickSound = id
+    }
+
+    private fun playClick() {
+        soundPool?.play(clickSound, CLICK_VOLUME, CLICK_VOLUME, 1, 0, 1f)
+    }
+
+    private fun toggleBokeh() {
+        val c = controller ?: return
+        if (c.bokehInfo == null) return
+        bokehOn = !bokehOn
+        c.stop()
+        c.bokeh = bokehOn
+        shutter.setBackgroundResource(R.drawable.shutter)
+        overlay.setFaces(emptyList())
+        overlay.clearTap()
+        val size = c.activePreviewSize
+        surfaceView.setAspect(size.width, size.height)
+        renderBokeh()
+        if (size.width == surfaceW && size.height == surfaceH) {
+            startCameraIfReady()
+        } else {
+            // Suprafața trebuie să aibă dimensiunea cerută de mod; camera pornește din surfaceChanged.
+            surfaceReady = false
+            surfaceView.holder.setFixedSize(size.width, size.height)
+        }
+    }
+
+    private fun renderBokeh() {
+        bokehButton.setTextColor(if (bokehOn) 0xFFFFC107.toInt() else 0xFFFFFFFF.toInt())
+        if (bokehOn) {
+            sceneText.text = getString(R.string.bokeh_scene)
+            val settings = StringBuilder(getString(R.string.bokeh_settings))
+            if (style != PhotoStyle.ORIGINAL) settings.append(" · ").append(style.title)
+            settingsText.text = settings.toString()
+            detailText.text = getString(R.string.bokeh_detail)
+        } else {
+            sceneText.text = getString(R.string.starting)
+            settingsText.text = ""
+            detailText.text = ""
+        }
     }
 
     private fun showDiagnostics() {
@@ -249,7 +325,8 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
     override fun onDestroy() {
         controller?.release()
-        shutterSound.release()
+        soundPool?.release()
+        soundPool = null
         super.onDestroy()
     }
 
@@ -278,7 +355,10 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         val c = controller ?: return
         // Așteptăm ca suprafața să aibă exact dimensiunea cerută pentru previzualizare.
-        if (width == c.previewSize.width && height == c.previewSize.height) {
+        surfaceW = width
+        surfaceH = height
+        val wanted = c.activePreviewSize
+        if (width == wanted.width && height == wanted.height) {
             surfaceReady = true
             startCameraIfReady()
         }
@@ -293,6 +373,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
     override fun onAnalysis(result: AnalysisResult) {
         val c = controller ?: return
+        if (bokehOn) return
         val input = SceneInput(
             stats = result.stats,
             faces = result.faces,
@@ -328,7 +409,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
     override fun onCaptureStarted(frames: Int) {
         // Cerc galben = ține telefonul nemișcat.
-        shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+        playClick()
         shutter.setBackgroundResource(R.drawable.shutter_busy)
         flash.alpha = 0.7f
         flash.animate().alpha(0f).setDuration(250).start()
@@ -337,7 +418,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     override fun onCaptureFinished(frames: Int) {
         shutter.setBackgroundResource(R.drawable.shutter)
         // La o fotografie simplă captura e aproape instantanee, deci al doilea sunet ar fi doar un ecou.
-        if (frames > 1) shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+        if (frames > 1) playClick()
     }
 
     override fun onCameraError(message: String) {
@@ -396,5 +477,8 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         private const val REQUEST_CAMERA = 1
         private const val PREF_STYLE = "style"
         private const val PREF_NIGHT = "night"
+
+        /** Volumul sunetului de declanșator (1 = volumul sunetelor de sistem ale telefonului). */
+        private const val CLICK_VOLUME = 0.5f
     }
 }

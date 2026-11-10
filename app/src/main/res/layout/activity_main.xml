@@ -37,6 +37,22 @@
             android:textSize="14sp"
             android:textStyle="bold" />
 
+        <TextView
+            android:id="@+id/bokeh_button"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_gravity="end|bottom"
+            android:layout_marginBottom="12dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/chip_dark"
+            android:gravity="center"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:text="@string/bokeh"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
         <View
             android:id="@+id/flash"
             android:layout_width="match_parent"

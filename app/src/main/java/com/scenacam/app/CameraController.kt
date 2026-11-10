@@ -74,6 +74,25 @@ class CameraController(private val context: Context, private val listener: Liste
     private val activeArray: Rect
     val previewSize: Size
     val jpegSize: Size
+
+    /** Nenul dacă telefonul oferă Bokeh-ul producătorului aplicațiilor terțe. */
+    val bokehInfo: BokehInfo?
+
+    /** Mod Bokeh. Se schimbă doar cât camera e oprită (între stop() și start()). */
+    @Volatile
+    var bokeh = false
+
+    /** Dimensiunea pe care trebuie să o aibă suprafața de previzualizare în modul curent. */
+    val activePreviewSize: Size
+        get() {
+            val info = bokehInfo
+            return if (bokeh && info != null) info.previewSize else previewSize
+        }
+
+    private var bokehSession: BokehSession? = null
+    private var bokehInFlight = false
+    private var shotFallbackDegrees = -1
+    private val bokehTimeout = Runnable { bokehCaptureFailed() }
     private val analysisSize: Size
     val caps: DeviceCaps
     val hardwareLevel: String
@@ -167,6 +186,7 @@ class CameraController(private val context: Context, private val listener: Liste
         chars = manager.getCameraCharacteristics(cameraId)
         sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         activeArray = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
+        bokehInfo = BokehSupport.query(manager, cameraId)
 
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)?.toList() ?: emptyList()
@@ -271,7 +291,9 @@ class CameraController(private val context: Context, private val listener: Liste
         val h = Handler(ct.looper)
         handler = h
 
-        val jr = ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 4)
+        val info = bokehInfo
+        val stillSize = if (bokeh && info != null) info.jpegSize else jpegSize
+        val jr = ImageReader.newInstance(stillSize.width, stillSize.height, ImageFormat.JPEG, 4)
         jr.setOnImageAvailableListener({ reader -> saveJpeg(reader) }, h)
         jpegReader = jr
         val yr = ImageReader.newInstance(analysisSize.width, analysisSize.height, ImageFormat.YUV_420_888, 4)
@@ -287,6 +309,9 @@ class CameraController(private val context: Context, private val listener: Liste
 
     fun stop() {
         handler?.removeCallbacksAndMessages(null)
+        bokehSession?.close()
+        bokehSession = null
+        bokehInFlight = false
         try {
             session?.close()
         } catch (ignored: Exception) {
@@ -351,6 +376,8 @@ class CameraController(private val context: Context, private val listener: Liste
     fun focusAt(xUpright: Float, yUpright: Float) {
         val h = handler ?: return
         h.post {
+            // În modul Bokeh focalizarea e hotărâtă de procesarea telefonului.
+            if (bokehSession != null) return@post
             val half = 0.08f
             tapRect = NormRect(xUpright - half, yUpright - half, xUpright + half, yUpright + half)
                 .clamped()
@@ -377,9 +404,29 @@ class CameraController(private val context: Context, private val listener: Liste
         val h = handler ?: return
         h.post {
             val dev = device ?: return@post
-            val ses = session ?: return@post
             val reader = jpegReader ?: return@post
             if (capturing) return@post
+            val orientation = (sensorOrientation + deviceOrientation + 360) % 360
+
+            val bs = bokehSession
+            if (bs != null) {
+                capturing = true
+                bokehInFlight = true
+                shotPlan = ShotPlan.DEFAULT.copy(scene = Scene.PORTRAIT)
+                shotFallbackDegrees = orientation
+                try {
+                    bs.capture(dev, reader.surface, zoom, orientation)
+                    main.post { listener.onCaptureStarted(2) }
+                    h.postDelayed(bokehTimeout, 10000)
+                } catch (e: Exception) {
+                    capturing = false
+                    bokehInFlight = false
+                    fail("Fotografia nu a putut fi făcută: ${e.message}")
+                }
+                return@post
+            }
+
+            val ses = session ?: return@post
             capturing = true
             val p = plan
             shotPlan = p
@@ -456,6 +503,25 @@ class CameraController(private val context: Context, private val listener: Liste
         val surface = previewSurface ?: return
         val jr = jpegReader ?: return
         val yr = yuvReader ?: return
+        val h = handler ?: return
+        if (bokeh && bokehInfo != null && Build.VERSION.SDK_INT >= 31) {
+            val bs = BokehSession(manager, cameraId, h, object : BokehSession.Events {
+                override fun onBokehReady() {
+                    applyPreview()
+                }
+
+                override fun onBokehFailed(message: String) {
+                    fail(message)
+                }
+
+                override fun onBokehCaptureFailed() {
+                    bokehCaptureFailed()
+                }
+            })
+            bokehSession = bs
+            bs.open(camera, surface, jr.surface)
+            return
+        }
         try {
             camera.createCaptureSession(
                 listOf(surface, jr.surface, yr.surface),
@@ -476,10 +542,24 @@ class CameraController(private val context: Context, private val listener: Liste
         }
     }
 
+    private fun bokehCaptureFailed() {
+        if (!bokehInFlight) return
+        bokehInFlight = false
+        capturing = false
+        handler?.removeCallbacks(bokehTimeout)
+        main.post { listener.onCaptureFinished(2) }
+        fail("Captura a eșuat")
+    }
+
     private fun applyPreview() {
         val dev = device ?: return
-        val ses = session ?: return
         val surface = previewSurface ?: return
+        val bs = bokehSession
+        if (bs != null) {
+            bs.applyPreview(dev, surface, zoom)
+            return
+        }
+        val ses = session ?: return
         val yr = yuvReader ?: return
         safely {
             val b = dev.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
@@ -622,6 +702,14 @@ class CameraController(private val context: Context, private val listener: Liste
             image.close()
         }
 
+        if (bokehInFlight) {
+            bokehInFlight = false
+            capturing = false
+            handler?.removeCallbacks(bokehTimeout)
+            main.post { listener.onCaptureFinished(2) }
+            dispatch(listOf(bytes), shotFallbackDegrees)
+            return
+        }
         if (burstActive) {
             burstFrames.add(bytes)
             finishBurst(false)
@@ -644,22 +732,22 @@ class CameraController(private val context: Context, private val listener: Liste
         if (frames.isEmpty()) fail("Captura a eșuat") else dispatch(frames)
     }
 
-    private fun dispatch(frames: List<ByteArray>) {
+    private fun dispatch(frames: List<ByteArray>, fallbackDegrees: Int = -1) {
         val used = shotPlan
         val tune = ColorTune.forShot(used.scene, style)
         try {
-            saveExecutor.execute { writePhoto(frames, used, tune) }
+            saveExecutor.execute { writePhoto(frames, used, tune, fallbackDegrees) }
         } catch (e: Exception) {
             main.post { listener.onPhotoSaved(null, used, 1) }
         }
     }
 
-    private fun writePhoto(frames: List<ByteArray>, used: ShotPlan, tune: ColorTune) {
+    private fun writePhoto(frames: List<ByteArray>, used: ShotPlan, tune: ColorTune, fallbackDegrees: Int) {
         val original = frames[0]
         val night = if (frames.size > 1) mergeNight(frames, tune) else null
         val merged = night?.second ?: 1
         // Dacă prelucrarea nu reușește, salvăm fotografia neschimbată.
-        val bytes = night?.first ?: stylize(original, tune) ?: original
+        val bytes = night?.first ?: stylize(original, tune, fallbackDegrees) ?: original
         var uri: Uri? = null
         try {
             val name = "ScenaCam_" + SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date()) + ".jpg"
@@ -685,13 +773,26 @@ class CameraController(private val context: Context, private val listener: Liste
     }
 
     /** Aplică reglajul de culoare. Întoarce null dacă nu e nimic de făcut sau dacă prelucrarea eșuează. */
-    private fun stylize(bytes: ByteArray, tune: ColorTune): ByteArray? {
-        if (tune.isIdentity) return null
+    private fun stylize(bytes: ByteArray, tune: ColorTune, fallbackDegrees: Int = -1): ByteArray? {
         var src: Bitmap? = null
         try {
+            var degrees = exifDegrees(bytes)
+            // Extensiile producătorului pot ignora orientarea cerută. Dacă fișierul nu are nici eticheta
+            // de orientare, nici pixelii rotiți, deși telefonul era ținut în picioare, îl rotim noi.
+            var fixRotation = false
+            if (degrees == 0 && (fallbackDegrees == 90 || fallbackDegrees == 270)) {
+                val bounds = BitmapFactory.Options()
+                bounds.inJustDecodeBounds = true
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                if (bounds.outWidth > bounds.outHeight) {
+                    degrees = fallbackDegrees
+                    fixRotation = true
+                }
+            }
+            if (tune.isIdentity && !fixRotation) return null
             val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
             src = source
-            return render(source, exifDegrees(bytes), tune)
+            return render(source, degrees, tune)
         } catch (t: Throwable) {
             // inclusiv lipsă de memorie la fotografii foarte mari
             return null
