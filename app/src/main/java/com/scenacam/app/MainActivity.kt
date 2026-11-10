@@ -38,6 +38,9 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     private lateinit var scaleDetector: ScaleGestureDetector
     private var zoom = 1f
     private var multiTouch = false
+    private lateinit var nightButton: TextView
+    private var nightEnabled = true
+    private var lastPlan: ShotPlan = ShotPlan.DEFAULT
     private lateinit var shutter: View
 
     private var controller: CameraController? = null
@@ -69,6 +72,14 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         styleButton = findViewById(R.id.style_button)
         infoButton = findViewById(R.id.info_button)
         zoomText = findViewById(R.id.zoom_text)
+        nightButton = findViewById(R.id.night_button)
+        nightEnabled = getPreferences(Context.MODE_PRIVATE).getBoolean(PREF_NIGHT, true)
+        nightButton.setOnClickListener {
+            nightEnabled = !nightEnabled
+            controller?.nightBurst = nightEnabled
+            getPreferences(Context.MODE_PRIVATE).edit().putBoolean(PREF_NIGHT, nightEnabled).apply()
+            renderNight()
+        }
 
         scaleDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: ScaleGestureDetector): Boolean {
@@ -93,6 +104,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
             val c = CameraController(this, this)
             controller = c
             c.style = style
+            c.nightBurst = nightEnabled
             surfaceView.setAspect(c.previewSize.width, c.previewSize.height)
             surfaceView.holder.setFixedSize(c.previewSize.width, c.previewSize.height)
             val manual = if (c.caps.manualSensor) getString(R.string.manual_yes) else getString(R.string.manual_no)
@@ -105,6 +117,9 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         surfaceView.holder.addCallback(this)
 
         shutter.setOnClickListener {
+            if (nightEnabled && lastPlan.burst > 1 && controller != null) {
+                Toast.makeText(this, getString(R.string.hold_still, lastPlan.burst), Toast.LENGTH_SHORT).show()
+            }
             controller?.takePhoto()
             flash.alpha = 0.7f
             flash.animate().alpha(0f).setDuration(250).start()
@@ -168,7 +183,13 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
         renderMode()
         renderStyle()
+        renderNight()
         applyZoom(1f)
+    }
+
+    private fun renderNight() {
+        nightButton.text = getString(if (nightEnabled) R.string.night_on else R.string.night_off)
+        nightButton.setTextColor(if (nightEnabled) 0xFFFFD54F.toInt() else 0xFF9E9E9E.toInt())
     }
 
     private fun applyZoom(ratio: Float) {
@@ -287,18 +308,24 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         val scene = forcedScene ?: detected
         val plan = engine.plan(scene, input, c.caps)
         c.setPlan(plan)
+        lastPlan = plan
 
         overlay.setFaces(result.faces.map { it.sensorRect.sensorToUpright(c.sensorOrientation) })
         render(plan, input, detected)
     }
 
-    override fun onPhotoSaved(uri: Uri?, plan: ShotPlan) {
+    override fun onPhotoSaved(uri: Uri?, plan: ShotPlan, merged: Int) {
         if (uri == null) {
             Toast.makeText(this, R.string.save_failed, Toast.LENGTH_LONG).show()
             return
         }
         lastPhoto = uri
-        Toast.makeText(this, getString(R.string.saved, plan.scene.title), Toast.LENGTH_SHORT).show()
+        val message = if (merged > 1) {
+            getString(R.string.saved_merged, plan.scene.title, merged)
+        } else {
+            getString(R.string.saved, plan.scene.title)
+        }
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     override fun onCameraError(message: String) {
@@ -342,6 +369,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
             }
         }
         if (plan.meterRect != null) sb.append(" · ").append(getString(R.string.face_metering))
+        if (nightEnabled && plan.burst > 1) sb.append(" · ").append(getString(R.string.frames, plan.burst))
         if (style != PhotoStyle.ORIGINAL) sb.append(" · ").append(style.title)
         settingsText.text = sb.toString()
 
@@ -355,5 +383,6 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     companion object {
         private const val REQUEST_CAMERA = 1
         private const val PREF_STYLE = "style"
+        private const val PREF_NIGHT = "night"
     }
 }

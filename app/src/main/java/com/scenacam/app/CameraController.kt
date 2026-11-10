@@ -54,7 +54,8 @@ class CameraController(private val context: Context, private val listener: Liste
 
     interface Listener {
         fun onAnalysis(result: AnalysisResult)
-        fun onPhotoSaved(uri: Uri?, plan: ShotPlan)
+        /** [merged] = câte cadre au fost combinate (1 = fotografie simplă). */
+        fun onPhotoSaved(uri: Uri?, plan: ShotPlan, merged: Int)
         fun onCameraError(message: String)
     }
 
@@ -96,6 +97,19 @@ class CameraController(private val context: Context, private val listener: Liste
     /** Stilul de culoare aplicat fotografiilor salvate. */
     @Volatile
     var style = PhotoStyle.ORIGINAL
+
+    /** Mod Noapte din mai multe cadre, activat de utilizator. */
+    @Volatile
+    var nightBurst = true
+
+    private val aeLockAvailable: Boolean
+    private val awbLockAvailable: Boolean
+
+    // Starea rafalei în curs; accesate doar de pe firul camerei.
+    private var burstActive = false
+    private var burstExpected = 0
+    private val burstFrames = ArrayList<ByteArray>()
+    private val burstTimeout = Runnable { finishBurst(true) }
 
     /** Prelucrarea și salvarea fotografiilor, separat de firul camerei. */
     private val saveExecutor = Executors.newSingleThreadExecutor()
@@ -217,6 +231,9 @@ class CameraController(private val context: Context, private val listener: Liste
         edgeHighQuality = (chars.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: IntArray(0))
             .contains(CameraMetadata.EDGE_MODE_HIGH_QUALITY)
 
+        aeLockAvailable = chars.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) ?: false
+        awbLockAvailable = chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) ?: false
+
         val zoomRange = if (Build.VERSION.SDK_INT >= 30) {
             chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
         } else {
@@ -247,7 +264,7 @@ class CameraController(private val context: Context, private val listener: Liste
         val h = Handler(ct.looper)
         handler = h
 
-        val jr = ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2)
+        val jr = ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 4)
         jr.setOnImageAvailableListener({ reader -> saveJpeg(reader) }, h)
         jpegReader = jr
         val yr = ImageReader.newInstance(analysisSize.width, analysisSize.height, ImageFormat.YUV_420_888, 4)
@@ -290,6 +307,8 @@ class CameraController(private val context: Context, private val listener: Liste
         yuvReader = null
         previewSurface = null
         capturing = false
+        burstActive = false
+        burstFrames.clear()
         aeIso = 0
         aeExposureNs = 0L
     }
@@ -380,9 +399,23 @@ class CameraController(private val context: Context, private val listener: Liste
                     b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure)
                     b.set(CaptureRequest.SENSOR_FRAME_DURATION, max(exposure, 33_333_333L))
                 }
-                ses.capture(b.build(), stillCallback, h)
+                val frames = if (nightBurst && p.burst > 1) min(p.burst, FrameStacker.MAX_FRAMES) else 1
+                if (frames > 1) {
+                    // Aceeași expunere și aceleași culori în toate cadrele, ca să se poată combina.
+                    if (aeLockAvailable) b.set(CaptureRequest.CONTROL_AE_LOCK, true)
+                    if (awbLockAvailable) b.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    val request = b.build()
+                    burstFrames.clear()
+                    burstExpected = frames
+                    burstActive = true
+                    ses.captureBurst(List(frames) { request }, stillCallback, h)
+                    h.postDelayed(burstTimeout, 12000)
+                } else {
+                    ses.capture(b.build(), stillCallback, h)
+                }
             } catch (e: Exception) {
                 capturing = false
+                burstActive = false
                 fail("Fotografia nu a putut fi făcută: ${e.message}")
             }
         }
@@ -541,12 +574,18 @@ class CameraController(private val context: Context, private val listener: Liste
 
     private val stillCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
-            capturing = false
+            // La rafală, următoarea fotografie e permisă abia după ce au sosit toate cadrele.
+            if (!burstActive) capturing = false
         }
 
         override fun onCaptureFailed(s: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
-            capturing = false
-            fail("Captura a eșuat")
+            if (burstActive) {
+                burstExpected--
+                finishBurst(false)
+            } else {
+                capturing = false
+                fail("Captura a eșuat")
+            }
         }
     }
 
@@ -567,18 +606,42 @@ class CameraController(private val context: Context, private val listener: Liste
             image.close()
         }
 
-        val used = shotPlan
-        val tune = ColorTune.forShot(used.scene, style)
-        try {
-            saveExecutor.execute { writePhoto(bytes, used, tune) }
-        } catch (e: Exception) {
-            main.post { listener.onPhotoSaved(null, used) }
+        if (burstActive) {
+            burstFrames.add(bytes)
+            finishBurst(false)
+        } else {
+            dispatch(listOf(bytes))
         }
     }
 
-    private fun writePhoto(original: ByteArray, used: ShotPlan, tune: ColorTune) {
-        // Dacă prelucrarea de culoare nu reușește, salvăm fotografia neschimbată.
-        val bytes = stylize(original, tune) ?: original
+    /** Încheie rafala când au sosit toate cadrele (sau forțat, la expirarea timpului). */
+    private fun finishBurst(force: Boolean) {
+        if (!burstActive) return
+        if (!force && burstFrames.size < burstExpected) return
+        burstActive = false
+        handler?.removeCallbacks(burstTimeout)
+        capturing = false
+        val frames = ArrayList(burstFrames)
+        burstFrames.clear()
+        if (frames.isEmpty()) fail("Captura a eșuat") else dispatch(frames)
+    }
+
+    private fun dispatch(frames: List<ByteArray>) {
+        val used = shotPlan
+        val tune = ColorTune.forShot(used.scene, style)
+        try {
+            saveExecutor.execute { writePhoto(frames, used, tune) }
+        } catch (e: Exception) {
+            main.post { listener.onPhotoSaved(null, used, 1) }
+        }
+    }
+
+    private fun writePhoto(frames: List<ByteArray>, used: ShotPlan, tune: ColorTune) {
+        val original = frames[0]
+        val night = if (frames.size > 1) mergeNight(frames, tune) else null
+        val merged = night?.second ?: 1
+        // Dacă prelucrarea nu reușește, salvăm fotografia neschimbată.
+        val bytes = night?.first ?: stylize(original, tune) ?: original
         var uri: Uri? = null
         try {
             val name = "ScenaCam_" + SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date()) + ".jpg"
@@ -600,48 +663,115 @@ class CameraController(private val context: Context, private val listener: Liste
             uri = null
         }
         val saved = uri
-        main.post { listener.onPhotoSaved(saved, used) }
+        main.post { listener.onPhotoSaved(saved, used, merged) }
     }
 
     /** Aplică reglajul de culoare. Întoarce null dacă nu e nimic de făcut sau dacă prelucrarea eșuează. */
     private fun stylize(bytes: ByteArray, tune: ColorTune): ByteArray? {
         if (tune.isIdentity) return null
         var src: Bitmap? = null
-        var dst: Bitmap? = null
         try {
-            val orientation = ExifInterface(ByteArrayInputStream(bytes))
-                .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-            val degrees = when (orientation) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                else -> 0
-            }
             val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
             src = source
+            return render(source, exifDegrees(bytes), tune)
+        } catch (t: Throwable) {
+            // inclusiv lipsă de memorie la fotografii foarte mari
+            return null
+        } finally {
+            src?.recycle()
+        }
+    }
+
+    /**
+     * Mod Noapte: aliniază și combină cadrele rafalei. Întoarce JPEG-ul și numărul de cadre combinate,
+     * sau null dacă nu s-a putut (atunci se salvează primul cadru).
+     */
+    private fun mergeNight(frames: List<ByteArray>, tune: ColorTune): Pair<ByteArray, Int>? {
+        var stacker: FrameStacker? = null
+        var work: Bitmap? = null
+        try {
+            val degrees = exifDegrees(frames[0])
+            val options = BitmapFactory.Options()
+            options.inMutable = true
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888
+            for (frame in frames) {
+                val bitmap = BitmapFactory.decodeByteArray(frame, 0, frame.size, options) ?: continue
+                if (stacker == null) stacker = FrameStacker(bitmap.width, bitmap.height)
+                stacker.add(BitmapSource(bitmap))
+                work?.recycle()
+                work = bitmap
+            }
+            val result = stacker ?: return null
+            val target = work ?: return null
+            if (result.merged < 2 || target.width != result.width || target.height != result.height) return null
+
+            result.finish()
+            val strip = 64
+            val buffer = IntArray(result.width * strip)
+            var y = 0
+            while (y < result.height) {
+                val rows = min(strip, result.height - y)
+                result.writeRows(y, rows, buffer)
+                target.setPixels(buffer, 0, result.width, 0, y, result.width, rows)
+                y += rows
+            }
+            val merged = result.merged
+            result.release()
+            stacker = null
+
+            val jpeg = render(target, degrees, tune) ?: return null
+            return Pair(jpeg, merged)
+        } catch (t: Throwable) {
+            return null
+        } finally {
+            stacker?.release()
+            work?.recycle()
+        }
+    }
+
+    private fun exifDegrees(jpeg: ByteArray): Int {
+        val orientation = ExifInterface(ByteArrayInputStream(jpeg))
+            .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        return when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270
+            else -> 0
+        }
+    }
+
+    /** Rotește pixelii (recodarea pierde eticheta de orientare), aplică reglajul de culoare și codează JPEG. */
+    private fun render(source: Bitmap, degrees: Int, tune: ColorTune): ByteArray? {
+        var dst: Bitmap? = null
+        try {
+            val out = ByteArrayOutputStream(4 * 1024 * 1024)
+            if (degrees == 0 && tune.isIdentity) {
+                return if (source.compress(Bitmap.CompressFormat.JPEG, 95, out)) out.toByteArray() else null
+            }
             val swap = degrees == 90 || degrees == 270
             val w = if (swap) source.height else source.width
             val h = if (swap) source.width else source.height
             val target = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             dst = target
 
-            // Rotim pixelii după orientarea din EXIF, fiindcă recodarea pierde eticheta de orientare.
             val transform = Matrix()
             transform.postRotate(degrees.toFloat(), source.width / 2f, source.height / 2f)
             transform.postTranslate((w - source.width) / 2f, (h - source.height) / 2f)
             val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-            paint.colorFilter = ColorMatrixColorFilter(ColorMatrix(tune.matrix()))
+            if (!tune.isIdentity) paint.colorFilter = ColorMatrixColorFilter(ColorMatrix(tune.matrix()))
             Canvas(target).drawBitmap(source, transform, paint)
 
-            val out = ByteArrayOutputStream(bytes.size)
-            if (!target.compress(Bitmap.CompressFormat.JPEG, 95, out)) return null
-            return out.toByteArray()
-        } catch (t: Throwable) {
-            // inclusiv lipsă de memorie la fotografii foarte mari
-            return null
+            return if (target.compress(Bitmap.CompressFormat.JPEG, 95, out)) out.toByteArray() else null
         } finally {
-            src?.recycle()
             dst?.recycle()
+        }
+    }
+
+    private class BitmapSource(private val bitmap: Bitmap) : PixelSource {
+        override val width: Int get() = bitmap.width
+        override val height: Int get() = bitmap.height
+        override fun readRows(y: Int, rows: Int, out: IntArray) {
+            bitmap.getPixels(out, 0, bitmap.width, 0, y, bitmap.width, rows)
         }
     }
 

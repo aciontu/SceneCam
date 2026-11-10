@@ -20,7 +20,12 @@
     <string name="no_gallery">Nu am găsit o aplicație de galerie</string>
     <string name="saved">Salvat în DCIM/ScenaCam · %1$s</string>
     <string name="style_label">Stil: %1$s</string>
-    <string name="info">Diagnostic</string>
+    <string name="info">Info</string>
+    <string name="night_on">Noapte+ ✓</string>
+    <string name="night_off">Noapte+ ✕</string>
+    <string name="frames">%1$d cadre</string>
+    <string name="hold_still">Mod noapte: ține telefonul nemișcat (%1$d cadre)</string>
+    <string name="saved_merged">Salvat în DCIM/ScenaCam · %1$s · %2$d cadre combinate</string>
     <string name="diagnostic_title">Ce oferă camera telefonului</string>
     <string name="copy">Copiază</string>
     <string name="copied">Copiat. Lipește textul în conversație.</string>

@@ -139,7 +139,9 @@ data class ShotPlan(
     val meterRect: NormRect?,
     /** Permite cadre mai lente în previzualizare ca expunerea automată să adune mai multă lumină. */
     val lowFps: Boolean,
-    val steadiness: Steadiness
+    val steadiness: Steadiness,
+    /** Câte cadre se fac și se combină (mod Noapte). 1 = o singură fotografie. */
+    val burst: Int = 1
 ) {
     val isManual: Boolean get() = manualIso != null && manualExposureNs != null
 
@@ -282,7 +284,12 @@ class SceneEngine {
             hdr = hdr,
             meterRect = face?.sensorRect,
             lowFps = lowFps,
-            steadiness = steadiness
+            steadiness = steadiness,
+            burst = if (hdr) 1 else when (scene) {
+                Scene.NIGHT -> 6
+                Scene.LOW_LIGHT, Scene.NIGHT_PORTRAIT -> 4
+                else -> 1
+            }
         )
     }
 

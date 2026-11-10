@@ -101,6 +101,18 @@
             android:textSize="13sp" />
 
         <TextView
+            android:id="@+id/night_button"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_gravity="center_horizontal|top"
+            android:background="@drawable/chip"
+            android:gravity="center"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:textColor="#FFD54F"
+            android:textSize="13sp" />
+
+        <TextView
             android:id="@+id/info_button"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
