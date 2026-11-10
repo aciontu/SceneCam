@@ -19,5 +19,11 @@
     <string name="no_photo_yet">Nu ai făcut încă nicio poză</string>
     <string name="no_gallery">Nu am găsit o aplicație de galerie</string>
     <string name="saved">Salvat în DCIM/ScenaCam · %1$s</string>
+    <string name="style_label">Stil: %1$s</string>
+    <string name="info">Diagnostic</string>
+    <string name="diagnostic_title">Ce oferă camera telefonului</string>
+    <string name="copy">Copiază</string>
+    <string name="copied">Copiat. Lipește textul în conversație.</string>
+    <string name="close">Închide</string>
     <string name="save_failed">Fotografia nu a putut fi salvată</string>
 </resources>

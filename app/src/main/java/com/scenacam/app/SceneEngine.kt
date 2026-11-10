@@ -24,7 +24,10 @@ enum class Scene(val title: String, val icon: String) {
     LOW_LIGHT("Lumină slabă", "🕯"),
     LANDSCAPE("Peisaj", "🏞"),
     SUNSET("Apus / răsărit", "🌅"),
-    FOOD("Mâncare", "🍽")
+    FOOD("Mâncare", "🍽"),
+    GREENERY("Flori și plante", "🌸"),
+    SNOW("Zăpadă", "❄"),
+    PET("Animale", "🐾")
 }
 
 enum class Awb { AUTO, DAYLIGHT, CLOUDY }
@@ -195,8 +198,13 @@ class SceneEngine {
 
         if (bestLabel(input.labels, SUNSET_LABELS) >= 0.6f) return Scene.SUNSET
         if (bestLabel(input.labels, FOOD_LABELS) >= 0.65f) return Scene.FOOD
+        if (bestLabel(input.labels, PET_LABELS) >= 0.7f) return Scene.PET
+        if (bestLabel(input.labels, SNOW_LABELS) >= 0.65f && (ev == null || ev >= 9f)) return Scene.SNOW
         if (s.shadowFrac > 0.28f && s.highlightFrac > 0.10f) return Scene.BACKLIT
-        if (bestLabel(input.labels, LANDSCAPE_LABELS) >= 0.6f && (ev == null || ev >= 8f)) return Scene.LANDSCAPE
+        val landscape = bestLabel(input.labels, LANDSCAPE_LABELS)
+        val greenery = bestLabel(input.labels, GREENERY_LABELS)
+        if (greenery >= 0.65f && greenery >= landscape) return Scene.GREENERY
+        if (landscape >= 0.6f && (ev == null || ev >= 8f)) return Scene.LANDSCAPE
         return Scene.AUTO
     }
 
@@ -215,11 +223,15 @@ class SceneEngine {
             Scene.LANDSCAPE -> -0.3f
             Scene.SUNSET -> -0.7f
             Scene.FOOD -> 0.3f
+            // Zăpada păcălește expunerea automată și iese gri; o împingem spre alb.
+            Scene.SNOW -> 0.7f
+            Scene.GREENERY -> 0f
+            Scene.PET -> 0f
             Scene.AUTO -> 0f
         }
         // Protejează zonele foarte luminoase (cer, becuri) când nu fotografiem o față.
         val protectHighlights = scene == Scene.AUTO || scene == Scene.LANDSCAPE ||
-            scene == Scene.LOW_LIGHT || scene == Scene.FOOD
+            scene == Scene.LOW_LIGHT || scene == Scene.FOOD || scene == Scene.GREENERY || scene == Scene.PET
         if (protectHighlights && s.highlightFrac > 0.15f) bias -= 0.3f
 
         val step = if (caps.evStep > 0f) caps.evStep else 1f
@@ -285,6 +297,12 @@ class SceneEngine {
             "Supper", "Lunch", "Sushi", "Pasta", "Salad", "Dessert", "Baked goods"
         )
 
+        private val PET_LABELS = setOf("Dog", "Cat", "Pet", "Bird", "Horse", "Puppy", "Kitten")
+
+        private val SNOW_LABELS = setOf("Snow", "Glacier", "Skiing", "Snowboarding", "Sledding", "Ski", "Ice")
+
+        private val GREENERY_LABELS = setOf("Flower", "Petal", "Plant", "Leaf", "Bouquet", "Rose", "Garden")
+
         private val LANDSCAPE_LABELS = setOf(
             "Sky", "Mountain", "Cliff", "Rock", "Canyon", "Glacier", "Iceberg", "Beach", "Sea", "Ocean",
             "Lake", "River", "Waterfall", "Forest", "Jungle", "Field", "Prairie", "Meadow", "Desert", "Sand",
@@ -335,7 +353,9 @@ class SceneEngine {
                 Steadiness.STEADY -> 1.0 / 30
                 else -> 1.0 / 60
             }
-            Scene.FOOD, Scene.AUTO -> when (steadiness) {
+            // Animalele se mișcă: timp scurt, chiar cu prețul unui ISO mai mare.
+            Scene.PET -> if (ev != null && ev < 7f) 1.0 / 125 else 1.0 / 500
+            Scene.FOOD, Scene.GREENERY, Scene.SNOW, Scene.AUTO -> when (steadiness) {
                 Steadiness.TRIPOD, Steadiness.STEADY -> 1.0 / 50
                 else -> 1.0 / 80
             }

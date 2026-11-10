@@ -2,8 +2,13 @@ package com.scenacam.app
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.view.MotionEvent
@@ -11,6 +16,7 @@ import android.view.OrientationEventListener
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -24,6 +30,9 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
     private lateinit var detailText: TextView
     private lateinit var modeButton: TextView
     private lateinit var galleryButton: TextView
+    private lateinit var styleButton: TextView
+    private lateinit var infoButton: TextView
+    private var style = PhotoStyle.ORIGINAL
     private lateinit var shutter: View
 
     private var controller: CameraController? = null
@@ -52,6 +61,11 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         modeButton = findViewById(R.id.mode_button)
         galleryButton = findViewById(R.id.gallery_button)
         shutter = findViewById(R.id.shutter)
+        styleButton = findViewById(R.id.style_button)
+        infoButton = findViewById(R.id.info_button)
+
+        val savedStyle = getPreferences(Context.MODE_PRIVATE).getString(PREF_STYLE, null)
+        style = PhotoStyle.values().firstOrNull { it.name == savedStyle } ?: PhotoStyle.ORIGINAL
 
         steadiness = SteadinessMonitor(this)
         orientationListener = object : OrientationEventListener(this) {
@@ -64,6 +78,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         try {
             val c = CameraController(this, this)
             controller = c
+            c.style = style
             surfaceView.setAspect(c.previewSize.width, c.previewSize.height)
             surfaceView.holder.setFixedSize(c.previewSize.width, c.previewSize.height)
             val manual = if (c.caps.manualSensor) getString(R.string.manual_yes) else getString(R.string.manual_no)
@@ -91,6 +106,16 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
             }
             renderMode()
         }
+
+        styleButton.setOnClickListener {
+            val all = PhotoStyle.values()
+            style = all[(style.ordinal + 1) % all.size]
+            controller?.style = style
+            getPreferences(Context.MODE_PRIVATE).edit().putString(PREF_STYLE, style.name).apply()
+            renderStyle()
+        }
+
+        infoButton.setOnClickListener { showDiagnostics() }
 
         galleryButton.setOnClickListener {
             val uri = lastPhoto
@@ -122,6 +147,38 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         }
 
         renderMode()
+        renderStyle()
+    }
+
+    private fun renderStyle() {
+        styleButton.text = getString(R.string.style_label, style.title)
+    }
+
+    private fun showDiagnostics() {
+        val report = try {
+            Diagnostics.report(this)
+        } catch (e: Exception) {
+            "Eroare: " + e.message
+        }
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val text = TextView(this)
+        text.text = report
+        text.textSize = 12f
+        text.typeface = Typeface.MONOSPACE
+        text.setTextIsSelectable(true)
+        text.setPadding(pad, pad, pad, pad)
+        val scroll = ScrollView(this)
+        scroll.addView(text)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.diagnostic_title)
+            .setView(scroll)
+            .setPositiveButton(R.string.copy) { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("ScenaCam diagnostic", report))
+                Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.close, null)
+            .show()
     }
 
     override fun onResume() {
@@ -257,6 +314,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
             }
         }
         if (plan.meterRect != null) sb.append(" · ").append(getString(R.string.face_metering))
+        if (style != PhotoStyle.ORIGINAL) sb.append(" · ").append(style.title)
         settingsText.text = sb.toString()
 
         val top = input.labels.entries.sortedByDescending { it.value }.take(3)
@@ -268,5 +326,6 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
 
     companion object {
         private const val REQUEST_CAMERA = 1
+        private const val PREF_STYLE = "style"
     }
 }

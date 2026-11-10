@@ -3,7 +3,14 @@ package com.scenacam.app
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Rect
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -16,6 +23,7 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.MeteringRectangle
+import android.media.ExifInterface
 import android.media.ImageReader
 import android.net.Uri
 import android.os.Handler
@@ -26,9 +34,12 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.SurfaceHolder
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -70,6 +81,13 @@ class CameraController(private val context: Context, private val listener: Liste
     /** Orientarea telefonului: 0, 90, 180 sau 270 de grade. */
     @Volatile
     var deviceOrientation = 0
+
+    /** Stilul de culoare aplicat fotografiilor salvate. */
+    @Volatile
+    var style = PhotoStyle.ORIGINAL
+
+    /** Prelucrarea și salvarea fotografiilor, separat de firul camerei. */
+    private val saveExecutor = Executors.newSingleThreadExecutor()
 
     // Ultimele valori alese de expunerea automată în previzualizare.
     @Volatile
@@ -258,6 +276,7 @@ class CameraController(private val context: Context, private val listener: Liste
     fun release() {
         stop()
         analyzer.close()
+        saveExecutor.shutdown()
     }
 
     // ------------------------------------------------------------------ comenzi din interfață
@@ -496,6 +515,17 @@ class CameraController(private val context: Context, private val listener: Liste
         }
 
         val used = shotPlan
+        val tune = ColorTune.forShot(used.scene, style)
+        try {
+            saveExecutor.execute { writePhoto(bytes, used, tune) }
+        } catch (e: Exception) {
+            main.post { listener.onPhotoSaved(null, used) }
+        }
+    }
+
+    private fun writePhoto(original: ByteArray, used: ShotPlan, tune: ColorTune) {
+        // Dacă prelucrarea de culoare nu reușește, salvăm fotografia neschimbată.
+        val bytes = stylize(original, tune) ?: original
         var uri: Uri? = null
         try {
             val name = "ScenaCam_" + SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date()) + ".jpg"
@@ -518,6 +548,48 @@ class CameraController(private val context: Context, private val listener: Liste
         }
         val saved = uri
         main.post { listener.onPhotoSaved(saved, used) }
+    }
+
+    /** Aplică reglajul de culoare. Întoarce null dacă nu e nimic de făcut sau dacă prelucrarea eșuează. */
+    private fun stylize(bytes: ByteArray, tune: ColorTune): ByteArray? {
+        if (tune.isIdentity) return null
+        var src: Bitmap? = null
+        var dst: Bitmap? = null
+        try {
+            val orientation = ExifInterface(ByteArrayInputStream(bytes))
+                .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            val degrees = when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                else -> 0
+            }
+            val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            src = source
+            val swap = degrees == 90 || degrees == 270
+            val w = if (swap) source.height else source.width
+            val h = if (swap) source.width else source.height
+            val target = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            dst = target
+
+            // Rotim pixelii după orientarea din EXIF, fiindcă recodarea pierde eticheta de orientare.
+            val transform = Matrix()
+            transform.postRotate(degrees.toFloat(), source.width / 2f, source.height / 2f)
+            transform.postTranslate((w - source.width) / 2f, (h - source.height) / 2f)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+            paint.colorFilter = ColorMatrixColorFilter(ColorMatrix(tune.matrix()))
+            Canvas(target).drawBitmap(source, transform, paint)
+
+            val out = ByteArrayOutputStream(bytes.size)
+            if (!target.compress(Bitmap.CompressFormat.JPEG, 95, out)) return null
+            return out.toByteArray()
+        } catch (t: Throwable) {
+            // inclusiv lipsă de memorie la fotografii foarte mari
+            return null
+        } finally {
+            src?.recycle()
+            dst?.recycle()
+        }
     }
 
     // ------------------------------------------------------------------ utilitare

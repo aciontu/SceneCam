@@ -5,7 +5,9 @@ Aplicație de cameră pentru Android (gândită pentru Samsung Galaxy A56) care 
 ## Ce face
 
 - **Recunoaște scena de ~2 ori pe secundă, fără internet**: obiecte și tip de scenă (ML Kit Image Labeling), fețe (ML Kit Face Detection), histogramă de lumină, luminozitatea reală a scenei (dedusă din ISO și timpul alese de aparat) și cât de stabil ții telefonul (giroscop).
-- **Scene**: Noapte, Lumină slabă, Portret, Portret de noapte, Contralumină, Peisaj, Apus/răsărit, Mâncare, Standard.
+- **Scene**: Noapte, Lumină slabă, Portret, Portret de noapte, Contralumină, Peisaj, Apus/răsărit, Mâncare, Flori și plante, Zăpadă, Animale, Standard.
+- **Stiluri de culoare** (butonul „Stil"): Original (neprelucrat), Viu (culori saturate, contrast mai mare), Luminos (imagine mai deschisă și mai blândă). În Viu și Luminos, culorile se reglează și după scenă. Efectul se vede în poza salvată, nu în previzualizare.
+- **Diagnostic**: butonul „Diagnostic" arată ce oferă telefonul aplicațiilor de cameră (senzor manual, RAW, extensiile producătorului).
 - **Reglaje automate pe fiecare scenă**:
   - *Noapte / lumină slabă*: dacă ții telefonul stabil, alege timp de expunere mai lung (până la 1/8 s din mână, 1/2 s pe trepied) și ISO mai mic, deci mai puțin zgomot. Dacă miști telefonul, scurtează timpul ca să nu iasă poza mișcată.
   - *Portret*: măsoară lumina și focalizează pe față, +0,3 EV, timp de expunere scurt ca să nu iasă persoana mișcată.
