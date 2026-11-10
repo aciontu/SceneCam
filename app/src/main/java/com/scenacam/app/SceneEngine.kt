@@ -220,7 +220,8 @@ class SceneEngine {
             Scene.PORTRAIT -> 0.3f
             Scene.NIGHT_PORTRAIT -> 0.3f
             Scene.BACKLIT -> if (face != null) 0.5f else 0.3f
-            Scene.NIGHT -> -0.3f
+            // Fără subexpunere: cu cât cadrele sunt mai luminoase, cu atât rămâne mai puțin zgomot după combinare.
+            Scene.NIGHT -> 0f
             Scene.LOW_LIGHT -> 0f
             Scene.LANDSCAPE -> -0.3f
             Scene.SUNSET -> -0.7f
@@ -286,7 +287,7 @@ class SceneEngine {
             lowFps = lowFps,
             steadiness = steadiness,
             burst = if (hdr) 1 else when (scene) {
-                Scene.NIGHT -> 6
+                Scene.NIGHT -> 8
                 Scene.LOW_LIGHT, Scene.NIGHT_PORTRAIT -> 4
                 else -> 1
             }

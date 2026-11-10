@@ -99,15 +99,22 @@ class FrameStacker(val width: Int, val height: Int) {
             i += 7
         }
         val mean = if (samples == 0) 128f else total.toFloat() / samples
-        lift = if (mean >= LIFT_BELOW) 1f else min(MAX_LIFT, LIFT_BELOW / max(mean, 20f))
+        // Factorul care aduce luminanța medie la țintă, pe o curbă care lasă albul pe loc.
+        lift = if (mean >= LIFT_BELOW) {
+            1f
+        } else {
+            val m = max(mean, 10f)
+            (LIFT_TARGET * (1f - m / 255f) / (m * (1f - LIFT_TARGET / 255f))).coerceIn(1f, MAX_LIFT)
+        }
 
-        // Curbă care ridică umbrele cu factorul "lift" și lasă albul pe loc, deci nu arde luminile.
+        // Tabel de amplificare în funcție de luminanță (x1024). Aceeași amplificare se aplică pe
+        // toate cele trei culori ale pixelului, ca imaginea să nu își piardă culoarea când e deschisă.
         val g = lift
         val table = IntArray(1021)
         for (k in 0..1020) {
             val v = k / 4f
-            val out = v * g / (1f + (g - 1f) * v / 255f)
-            table[k] = out.roundToInt().coerceIn(0, 255)
+            val gain = if (v < 0.5f) g else (v * g / (1f + (g - 1f) * v / 255f)) / v
+            table[k] = (gain * 1024f).roundToInt()
         }
         lut = table
     }
@@ -115,14 +122,26 @@ class FrameStacker(val width: Int, val height: Int) {
     /** Scrie rezultatul ca pixeli ARGB. Se apelează după [finish]. */
     fun writeRows(y: Int, rows: Int, out: IntArray) {
         val table = lut ?: return
+        val sat = ((1f - 0.07f * (lift - 1f)) * 256f).roundToInt().coerceIn(160, 256)
         var idx = y * width
         val end = idx + rows * width
         var o = 0
         while (idx < end) {
             val c = max(1, count[idx].toInt())
-            val r = table[min(1020, sumR[idx] * 4 / c)]
-            val g = table[min(1020, sumG[idx] * 4 / c)]
-            val b = table[min(1020, sumB[idx] * 4 / c)]
+            val r4 = sumR[idx] * 4 / c
+            val g4 = sumG[idx] * 4 / c
+            val b4 = sumB[idx] * 4 / c
+            val gain = table[min(1020, (r4 * 77 + g4 * 150 + b4 * 29) shr 8)]
+            var r = min(255, (r4 * gain + 2048) shr 12)
+            var g = min(255, (g4 * gain + 2048) shr 12)
+            var b = min(255, (b4 * gain + 2048) shr 12)
+            if (sat < 256) {
+                // Umbrele deschise mult ies prea colorate; le temperăm proporțional cu deschiderea.
+                val l = (r * 77 + g * 150 + b * 29) shr 8
+                r = (l + (((r - l) * sat) shr 8)).coerceIn(0, 255)
+                g = (l + (((g - l) * sat) shr 8)).coerceIn(0, 255)
+                b = (l + (((b - l) * sat) shr 8)).coerceIn(0, 255)
+            }
             out[o] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             idx++
             o++
@@ -265,6 +284,9 @@ class FrameStacker(val width: Int, val height: Int) {
 
         /** Sub această luminanță medie imaginea e deschisă. */
         private const val LIFT_BELOW = 80f
-        private const val MAX_LIFT = 1.8f
+
+        /** Luminanța medie spre care e adusă o imagine întunecată. */
+        private const val LIFT_TARGET = 88f
+        private const val MAX_LIFT = 4.5f
     }
 }
