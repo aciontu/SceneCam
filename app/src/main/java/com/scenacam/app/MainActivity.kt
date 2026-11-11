@@ -114,7 +114,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
             controller = c
             c.style = style
             c.nightBurst = nightEnabled
-            surfaceView.setAspect(c.previewSize.width, c.previewSize.height)
+            setPreviewAspect(c.previewSize.width, c.previewSize.height)
             surfaceView.holder.setFixedSize(c.previewSize.width, c.previewSize.height)
             val manual = if (c.caps.manualSensor) getString(R.string.manual_yes) else getString(R.string.manual_no)
             detailText.text = getString(
@@ -137,8 +137,12 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
                 val zoomAt = IntArray(2)
                 nightButton.getLocationOnScreen(night)
                 zoomText.getLocationOnScreen(zoomAt)
-                val delta = night[0] + nightButton.width / 2 - (zoomAt[0] + zoomText.width / 2)
-                if (delta > 1 || delta < -1) zoomText.translationX += delta
+                val dx = night[0] + nightButton.width / 2 - (zoomAt[0] + zoomText.width / 2)
+                if (dx > 1 || dx < -1) zoomText.translationX += dx
+                // Pe verticală: cu 8dp deasupra butonului, oriunde ar cădea rândul de butoane pe ecran.
+                val gap = (8 * resources.displayMetrics.density).toInt()
+                val dy = night[1] - gap - zoomText.height - zoomAt[1]
+                if (dy > 1 || dy < -1) zoomText.translationY += dy
             }
         }
         shutter.setOnClickListener { controller?.takePhoto() }
@@ -205,6 +209,11 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         applyZoom(1f)
     }
 
+    private fun setPreviewAspect(longSide: Int, shortSide: Int) {
+        surfaceView.setAspect(longSide, shortSide)
+        findViewById<AspectFrameLayout>(R.id.preview_frame).setAspect(longSide, shortSide)
+    }
+
     private fun renderNight() {
         nightButton.text = getString(if (nightEnabled) R.string.night_on else R.string.night_off)
         nightButton.setTextColor(if (nightEnabled) 0xFFFFD54F.toInt() else 0xFF9E9E9E.toInt())
@@ -261,7 +270,7 @@ class MainActivity : Activity(), CameraController.Listener, SurfaceHolder.Callba
         overlay.setFaces(emptyList())
         overlay.clearTap()
         val size = c.activePreviewSize
-        surfaceView.setAspect(size.width, size.height)
+        setPreviewAspect(size.width, size.height)
         renderBokeh()
         if (size.width == surfaceW && size.height == surfaceH) {
             startCameraIfReady()

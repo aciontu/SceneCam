@@ -5,7 +5,8 @@
     android:background="#000000"
     android:fitsSystemWindows="true">
 
-    <FrameLayout
+    <com.scenacam.app.AspectFrameLayout
+        android:id="@+id/preview_frame"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
@@ -14,7 +15,7 @@
         <com.scenacam.app.AutoFitSurfaceView
             android:id="@+id/surface"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+            android:layout_height="match_parent" />
 
         <com.scenacam.app.OverlayView
             android:id="@+id/overlay"
@@ -43,7 +44,7 @@
             android:layout_height="match_parent"
             android:alpha="0"
             android:background="#FFFFFF" />
-    </FrameLayout>
+    </com.scenacam.app.AspectFrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"

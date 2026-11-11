@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.util.AttributeSet
 import android.view.SurfaceView
 import android.view.View
+import android.widget.FrameLayout
 import kotlin.math.roundToInt
 
 /** Previzualizare cu lățimea ecranului și înălțimea dată de raportul de aspect al fotografiei. */
@@ -27,6 +28,36 @@ class AutoFitSurfaceView @JvmOverloads constructor(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         setMeasuredDimension(width, (width * ratio).roundToInt())
+    }
+}
+
+/**
+ * Container care are exact forma previzualizării (lățimea ecranului, înălțimea după raportul de aspect),
+ * astfel încât tot ce e așezat în el (cadrele fețelor, punctul de focalizare, indicatorul de zoom)
+ * să se raporteze la imaginea vizibilă, nu la tot ecranul.
+ */
+class AspectFrameLayout @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyle: Int = 0
+) : FrameLayout(context, attrs, defStyle) {
+
+    private var ratio = 4f / 3f
+
+    fun setAspect(longSide: Int, shortSide: Int) {
+        if (longSide > 0 && shortSide > 0) {
+            ratio = longSide.toFloat() / shortSide
+            requestLayout()
+        }
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val height = (width * ratio).roundToInt()
+        super.onMeasure(
+            MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
+        )
     }
 }
 
